@@ -63,6 +63,7 @@ workflow {
         args,
         params.outdir,
         params.input,
+        params.input_ids,
         params.ena_metadata_fields
     )
 

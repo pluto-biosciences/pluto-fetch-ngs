@@ -36,6 +36,7 @@ workflow PIPELINE_INITIALISATION {
     nextflow_cli_args   //   array: List of positional nextflow CLI args
     outdir              //  string: The output directory where the results will be saved
     input               //  string: File containing SRA/ENA/GEO/DDBJ identifiers one per line to download their associated metadata and FastQ files
+    input_ids           //  string: Comma-separated list of IDs (alternative to input file)
     ena_metadata_fields //  string: Comma-separated list of ENA metadata fields to fetch before downloading data
 
     main:
@@ -73,22 +74,37 @@ workflow PIPELINE_INITIALISATION {
     )
 
     //
-    // Auto-detect input id type
+    // Handle input: either from --input_ids (inline) or --input (file)
     //
-    ch_input = file(input)
-    if (isSraId(ch_input)) {
-        sraCheckENAMetadataFields(ena_metadata_fields)
+    if (input_ids) {
+        // Parse inline IDs from comma-separated string
+        def ids_list = input_ids.split(',').collect { it.trim() }.findAll { it }
+        if (isSraIdList(ids_list)) {
+            sraCheckENAMetadataFields(ena_metadata_fields)
+        } else {
+            error('Ids provided via --input_ids not recognised please make sure they are either SRA / ENA / GEO / DDBJ ids!')
+        }
+        Channel
+            .fromList(ids_list)
+            .unique()
+            .set { ch_ids }
+    } else if (input) {
+        // Read from file (original behavior)
+        ch_input = file(input)
+        if (isSraId(ch_input)) {
+            sraCheckENAMetadataFields(ena_metadata_fields)
+        } else {
+            error('Ids provided via --input not recognised please make sure they are either SRA / ENA / GEO / DDBJ ids!')
+        }
+        Channel
+            .from(ch_input)
+            .splitCsv(header:false, sep:'', strip:true)
+            .map { it[0] }
+            .unique()
+            .set { ch_ids }
     } else {
-        error('Ids provided via --input not recognised please make sure they are either SRA / ENA / GEO / DDBJ ids!')
+        error('Either --input or --input_ids must be provided!')
     }
-
-    // Read in ids from --input file
-    Channel
-        .from(ch_input)
-        .splitCsv(header:false, sep:'', strip:true)
-        .map { it[0] }
-        .unique()
-        .set { ch_ids }
 
     emit:
     ids = ch_ids
@@ -139,7 +155,7 @@ workflow PIPELINE_COMPLETION {
 */
 
 //
-// Check if input ids are from the SRA
+// Check if input ids are from the SRA (file-based)
 //
 def isSraId(input) {
     def is_sra = false
@@ -159,6 +175,30 @@ def isSraId(input) {
             is_sra = true
         } else {
             error("Mixture of ids provided via --input: ${no_match_ids.join(', ')}\nPlease provide either SRA / ENA / GEO / DDBJ ids!")
+        }
+    }
+    return is_sra
+}
+
+//
+// Check if input ids list are from the SRA (for inline --input_ids)
+//
+def isSraIdList(ids_list) {
+    def is_sra = false
+    def no_match_ids = []
+    def pattern = /^(((SR|ER|DR)[APRSX])|(SAM(N|EA|D))|(PRJ(NA|EB|DB))|(GS[EM]))(\d+)$/
+    ids_list.each { id ->
+        if (!(id =~ pattern)) {
+            no_match_ids << id
+        }
+    }
+
+    def num_match = ids_list.size() - no_match_ids.size()
+    if (num_match > 0) {
+        if (num_match == ids_list.size()) {
+            is_sra = true
+        } else {
+            error("Mixture of ids provided via --input_ids: ${no_match_ids.join(', ')}\nPlease provide either SRA / ENA / GEO / DDBJ ids!")
         }
     }
     return is_sra
